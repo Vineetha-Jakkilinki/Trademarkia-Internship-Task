@@ -27,6 +27,14 @@ def home():
 # ---------------------------------------------------
 
 model = None
+
+def get_model():
+    global model
+    if model is None:
+        print("Loading embedding model...")
+        model = SentenceTransformer("all-MiniLM-L6-v2")
+    return model
+
 doc_embeddings = None
 cluster_probs = None
 documents = None
@@ -46,15 +54,12 @@ SIMILARITY_THRESHOLD = 0.80
 @app.on_event("startup")
 def load_data():
 
-    global model
+
     global doc_embeddings
     global cluster_probs
     global documents
     global cluster_centroids
     global semantic_cache
-
-    print("Loading embedding model...")
-    model = SentenceTransformer("all-MiniLM-L6-v2")
 
     print("Loading embeddings...")
     doc_embeddings = np.load("vector_store/embeddings.npy")
@@ -137,7 +142,7 @@ def query_endpoint(request: QueryRequest):
 
     print("\nUser Query:", query)
 
-    query_embedding = model.encode(query)
+    query_embedding = get_model().encode(query)
 
     # Determine dominant cluster
     cluster_scores = cosine_similarity([query_embedding], cluster_centroids)[0]
