@@ -9,6 +9,8 @@ import pickle
 import json
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
+import os
+import uvicorn
 
 
 # ---------------------------------------------------
@@ -255,3 +257,8 @@ def clear_cache():
         pickle.dump({}, f)
 
     return {"message": "Cache cleared successfully"}
+
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 10000))
+    uvicorn.run("src.api_service:app", host="0.0.0.0", port=port)
