@@ -14,7 +14,7 @@ import pickle
 import json
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
-
+import os
 
 # ---------------------------------------------------
 # Initialize FastAPI
@@ -38,15 +38,17 @@ def load_model():
 # ---------------------------------------------------
 # Load Vector Store Data
 # ---------------------------------------------------
+BASE_DIR = os.path.dirname(os.path.dirname(__file__))
+VECTOR_DIR = os.path.join(BASE_DIR, "vector_store")
 
 print("Loading embeddings...")
-doc_embeddings = np.load("vector_store/embeddings.npy")
+doc_embeddings = np.load(os.path.join(VECTOR_DIR, "embeddings.npy"))
 
 print("Loading cluster probabilities...")
-cluster_probs = np.load("vector_store/cluster_probabilities.npy")
+cluster_probs = np.load(os.path.join(VECTOR_DIR, "cluster_probabilities.npy"))
 
 print("Loading documents...")
-with open("vector_store/documents.json") as f:
+with open(os.path.join(VECTOR_DIR, "documents.json")) as f:
     documents = json.load(f)
 
 
@@ -80,7 +82,7 @@ print("Cluster centroids ready")
 # ---------------------------------------------------
 
 try:
-    with open("vector_store/semantic_cache.pkl", "rb") as f:
+    with open(os.path.join(VECTOR_DIR, "semantic_cache.pkl"), "rb") as f:
         semantic_cache = pickle.load(f)
 
     print("Existing cache loaded")
@@ -214,7 +216,7 @@ def query_endpoint(request: QueryRequest):
         "result": result_texts
     }
 
-    with open("vector_store/semantic_cache.pkl", "wb") as f:
+    with open(os.path.join(VECTOR_DIR, "semantic_cache.pkl"), "wb") as f:
         pickle.dump(semantic_cache, f)
 
 
@@ -266,7 +268,7 @@ def clear_cache():
     hit_count = 0
     miss_count = 0
 
-    with open("vector_store/semantic_cache.pkl", "wb") as f:
+    with open(os.path.join(VECTOR_DIR, "semantic_cache.pkl"), "wb") as f:
         pickle.dump({}, f)
 
     return {"message": "Cache cleared successfully"}
