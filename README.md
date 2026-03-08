@@ -19,7 +19,9 @@ https://vineetha-jakkilinki-semantic-search-api.hf.space/docs
 ## Endpoints
 
 POST `/query` – Perform semantic search for a query
+
 GET `/cache/stats` – View cache statistics
+
 DELETE `/cache` – Clear the semantic cache
 
 ## Tech Stack
