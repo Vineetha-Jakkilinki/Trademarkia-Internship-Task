@@ -1,5 +1,10 @@
 """
 FastAPI service for Semantic Search + Semantic Cache.
+
+This exposes three endpoints:
+POST /query
+GET /cache/stats
+DELETE /cache
 """
 
 from fastapi import FastAPI
@@ -9,8 +14,6 @@ import pickle
 import json
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
-import os
-import uvicorn
 
 
 # ---------------------------------------------------
@@ -19,89 +22,82 @@ import uvicorn
 
 app = FastAPI(title="Semantic Search API")
 
-@app.get("/")
-def home():
-    return {"message": "Semantic Search API running"}
-
 
 # ---------------------------------------------------
-# Global variables (loaded at startup)
+# Load Model
 # ---------------------------------------------------
 
 model = None
 
-def get_model():
+@app.on_event("startup")
+def load_model():
     global model
-    if model is None:
-        print("Loading embedding model...")
-        model = SentenceTransformer("all-MiniLM-L6-v2")
-    return model
+    print("Loading embedding model...")
+    model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 
-doc_embeddings = None
-cluster_probs = None
-documents = None
-cluster_centroids = None
-semantic_cache = None
+# ---------------------------------------------------
+# Load Vector Store Data
+# ---------------------------------------------------
+
+print("Loading embeddings...")
+doc_embeddings = np.load("vector_store/embeddings.npy")
+
+print("Loading cluster probabilities...")
+cluster_probs = np.load("vector_store/cluster_probabilities.npy")
+
+print("Loading documents...")
+with open("vector_store/documents.json") as f:
+    documents = json.load(f)
+
+
+# ---------------------------------------------------
+# Compute cluster centroids
+# ---------------------------------------------------
+
+NUM_CLUSTERS = cluster_probs.shape[1]
+cluster_centroids = []
+
+print("Computing cluster centroids...")
+
+for i in range(NUM_CLUSTERS):
+
+    cluster_docs = doc_embeddings[cluster_probs.argmax(axis=1) == i]
+
+    if len(cluster_docs) > 0:
+        centroid = np.mean(cluster_docs, axis=0)
+    else:
+        centroid = np.zeros(doc_embeddings.shape[1])
+
+    cluster_centroids.append(centroid)
+
+cluster_centroids = np.array(cluster_centroids)
+
+print("Cluster centroids ready")
+
+
+# ---------------------------------------------------
+# Load Semantic Cache
+# ---------------------------------------------------
+
+try:
+    with open("vector_store/semantic_cache.pkl", "rb") as f:
+        semantic_cache = pickle.load(f)
+
+    print("Existing cache loaded")
+
+except:
+    semantic_cache = {}
+    print("Starting with empty cache")
+
+
+# ---------------------------------------------------
+# Cache Statistics
+# ---------------------------------------------------
 
 hit_count = 0
 miss_count = 0
 
 SIMILARITY_THRESHOLD = 0.80
-
-
-# ---------------------------------------------------
-# Startup Event (loads everything)
-# ---------------------------------------------------
-
-@app.on_event("startup")
-def load_data():
-
-
-    global doc_embeddings
-    global cluster_probs
-    global documents
-    global cluster_centroids
-    global semantic_cache
-
-    print("Loading embeddings...")
-    doc_embeddings = np.load("vector_store/embeddings.npy")
-
-    print("Loading cluster probabilities...")
-    cluster_probs = np.load("vector_store/cluster_probabilities.npy")
-
-    print("Loading documents...")
-    with open("vector_store/documents.json") as f:
-        documents = json.load(f)
-
-    print("Computing cluster centroids...")
-
-    NUM_CLUSTERS = cluster_probs.shape[1]
-    centroids = []
-
-    for i in range(NUM_CLUSTERS):
-
-        cluster_docs = doc_embeddings[cluster_probs.argmax(axis=1) == i]
-
-        if len(cluster_docs) > 0:
-            centroid = np.mean(cluster_docs, axis=0)
-        else:
-            centroid = np.zeros(doc_embeddings.shape[1])
-
-        centroids.append(centroid)
-
-    cluster_centroids = np.array(centroids)
-
-    print("Cluster centroids ready")
-
-    try:
-        with open("vector_store/semantic_cache.pkl", "rb") as f:
-            semantic_cache = pickle.load(f)
-
-        print("Existing cache loaded")
-
-    except:
-        semantic_cache = {}
-        print("Starting with empty cache")
 
 
 # ---------------------------------------------------
@@ -138,25 +134,32 @@ def run_semantic_search(query_embedding, dominant_cluster, top_k=3):
 @app.post("/query")
 def query_endpoint(request: QueryRequest):
 
-    global hit_count, miss_count, semantic_cache
+    global hit_count, miss_count
 
     query = request.query
 
     print("\nUser Query:", query)
 
-    query_embedding = get_model().encode(query)
+    query_embedding = model.encode(query)
 
+    # -----------------------------
     # Determine dominant cluster
+    # -----------------------------
+
     cluster_scores = cosine_similarity([query_embedding], cluster_centroids)[0]
 
     dominant_cluster = int(np.argmax(cluster_scores))
 
+    # -----------------------------
     # Cache lookup
+    # -----------------------------
+
     best_match = None
     best_similarity = 0
 
     for cached_query, data in semantic_cache.items():
 
+        # Skip corrupted cache entries
         if not isinstance(data, dict) or "embedding" not in data:
             continue
 
@@ -169,7 +172,11 @@ def query_endpoint(request: QueryRequest):
             best_similarity = similarity
             best_match = cached_query
 
+
+    # -----------------------------
     # Cache HIT
+    # -----------------------------
+
     if best_similarity >= SIMILARITY_THRESHOLD:
 
         hit_count += 1
@@ -187,7 +194,11 @@ def query_endpoint(request: QueryRequest):
             "dominant_cluster": dominant_cluster
         }
 
+
+    # -----------------------------
     # Cache MISS
+    # -----------------------------
+
     miss_count += 1
 
     print("Cache MISS → running search")
@@ -195,6 +206,7 @@ def query_endpoint(request: QueryRequest):
     results = run_semantic_search(query_embedding, dominant_cluster)
 
     result_texts = [documents[i] for i in results]
+
 
     # Store in cache
     semantic_cache[query] = {
@@ -204,6 +216,7 @@ def query_endpoint(request: QueryRequest):
 
     with open("vector_store/semantic_cache.pkl", "wb") as f:
         pickle.dump(semantic_cache, f)
+
 
     return {
         "query": query,
@@ -257,8 +270,3 @@ def clear_cache():
         pickle.dump({}, f)
 
     return {"message": "Cache cleared successfully"}
-
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    uvicorn.run("src.api_service:app", host="0.0.0.0", port=port)
