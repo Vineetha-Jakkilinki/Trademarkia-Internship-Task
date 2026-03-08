@@ -23,14 +23,20 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 app = FastAPI(title="Semantic Search API")
 
-
+@app.get("/")
+def home():
+    return {"message": "Semantic Search API running"}
 # ---------------------------------------------------
 # Load Model
 # ---------------------------------------------------
 
-print("Loading embedding model...")
-model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+model = None
 
+@app.on_event("startup")
+def load_model():
+    global model
+    print("Loading embedding model...")
+    model = SentenceTransformer("all-MiniLM-L6-v2")
 
 # ---------------------------------------------------
 # Load Vector Store Data
