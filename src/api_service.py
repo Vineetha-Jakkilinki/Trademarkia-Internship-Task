@@ -1,11 +1,5 @@
 """
 FastAPI service for Semantic Search + Semantic Cache.
-
-This exposes three endpoints:
-
-POST /query
-GET /cache/stats
-DELETE /cache
 """
 
 from fastapi import FastAPI
@@ -26,83 +20,81 @@ app = FastAPI(title="Semantic Search API")
 @app.get("/")
 def home():
     return {"message": "Semantic Search API running"}
+
+
 # ---------------------------------------------------
-# Load Model
+# Global variables (loaded at startup)
 # ---------------------------------------------------
 
 model = None
-
-@app.on_event("startup")
-def load_model():
-    global model
-    print("Loading embedding model...")
-    model = SentenceTransformer("all-MiniLM-L6-v2")
-
-# ---------------------------------------------------
-# Load Vector Store Data
-# ---------------------------------------------------
-
-print("Loading embeddings...")
-doc_embeddings = np.load("vector_store/embeddings.npy")
-
-print("Loading cluster probabilities...")
-cluster_probs = np.load("vector_store/cluster_probabilities.npy")
-
-print("Loading documents...")
-with open("vector_store/documents.json") as f:
-    documents = json.load(f)
-
-
-# ---------------------------------------------------
-# Compute cluster centroids
-# ---------------------------------------------------
-
-NUM_CLUSTERS = cluster_probs.shape[1]
-
-cluster_centroids = []
-
-print("Computing cluster centroids...")
-
-for i in range(NUM_CLUSTERS):
-
-    cluster_docs = doc_embeddings[cluster_probs.argmax(axis=1) == i]
-
-    if len(cluster_docs) > 0:
-        centroid = np.mean(cluster_docs, axis=0)
-    else:
-        centroid = np.zeros(doc_embeddings.shape[1])
-
-    cluster_centroids.append(centroid)
-
-cluster_centroids = np.array(cluster_centroids)
-
-print("Cluster centroids ready")
-
-
-# ---------------------------------------------------
-# Load Semantic Cache
-# ---------------------------------------------------
-
-try:
-    with open("vector_store/semantic_cache.pkl", "rb") as f:
-        semantic_cache = pickle.load(f)
-
-    print("Existing cache loaded")
-
-except:
-    semantic_cache = {}
-
-    print("Starting with empty cache")
-
-
-# ---------------------------------------------------
-# Cache Statistics
-# ---------------------------------------------------
+doc_embeddings = None
+cluster_probs = None
+documents = None
+cluster_centroids = None
+semantic_cache = None
 
 hit_count = 0
 miss_count = 0
 
 SIMILARITY_THRESHOLD = 0.80
+
+
+# ---------------------------------------------------
+# Startup Event (loads everything)
+# ---------------------------------------------------
+
+@app.on_event("startup")
+def load_data():
+
+    global model
+    global doc_embeddings
+    global cluster_probs
+    global documents
+    global cluster_centroids
+    global semantic_cache
+
+    print("Loading embedding model...")
+    model = SentenceTransformer("all-MiniLM-L6-v2")
+
+    print("Loading embeddings...")
+    doc_embeddings = np.load("vector_store/embeddings.npy")
+
+    print("Loading cluster probabilities...")
+    cluster_probs = np.load("vector_store/cluster_probabilities.npy")
+
+    print("Loading documents...")
+    with open("vector_store/documents.json") as f:
+        documents = json.load(f)
+
+    print("Computing cluster centroids...")
+
+    NUM_CLUSTERS = cluster_probs.shape[1]
+    centroids = []
+
+    for i in range(NUM_CLUSTERS):
+
+        cluster_docs = doc_embeddings[cluster_probs.argmax(axis=1) == i]
+
+        if len(cluster_docs) > 0:
+            centroid = np.mean(cluster_docs, axis=0)
+        else:
+            centroid = np.zeros(doc_embeddings.shape[1])
+
+        centroids.append(centroid)
+
+    cluster_centroids = np.array(centroids)
+
+    print("Cluster centroids ready")
+
+    try:
+        with open("vector_store/semantic_cache.pkl", "rb") as f:
+            semantic_cache = pickle.load(f)
+
+        print("Existing cache loaded")
+
+    except:
+        semantic_cache = {}
+        print("Starting with empty cache")
 
 
 # ---------------------------------------------------
@@ -117,12 +109,16 @@ class QueryRequest(BaseModel):
 # Helper: Semantic Search
 # ---------------------------------------------------
 
-def run_semantic_search(query_embedding,dominant_cluster,top_k=3):
+def run_semantic_search(query_embedding, dominant_cluster, top_k=3):
 
     cluster_indices = np.where(cluster_probs.argmax(axis=1) == dominant_cluster)[0]
+
     cluster_embeddings = doc_embeddings[cluster_indices]
+
     similarities = cosine_similarity([query_embedding], cluster_embeddings)[0]
+
     top_local = np.argsort(similarities)[-top_k:][::-1]
+
     top_indices = cluster_indices[top_local]
 
     return top_indices
@@ -135,7 +131,7 @@ def run_semantic_search(query_embedding,dominant_cluster,top_k=3):
 @app.post("/query")
 def query_endpoint(request: QueryRequest):
 
-    global hit_count, miss_count
+    global hit_count, miss_count, semantic_cache
 
     query = request.query
 
@@ -143,24 +139,17 @@ def query_endpoint(request: QueryRequest):
 
     query_embedding = model.encode(query)
 
-    # -----------------------------
     # Determine dominant cluster
-    # -----------------------------
-
     cluster_scores = cosine_similarity([query_embedding], cluster_centroids)[0]
 
     dominant_cluster = int(np.argmax(cluster_scores))
 
-    # -----------------------------
     # Cache lookup
-    # -----------------------------
-
     best_match = None
     best_similarity = 0
 
     for cached_query, data in semantic_cache.items():
 
-        # Skip corrupted cache entries
         if not isinstance(data, dict) or "embedding" not in data:
             continue
 
@@ -173,10 +162,7 @@ def query_endpoint(request: QueryRequest):
             best_similarity = similarity
             best_match = cached_query
 
-    # -----------------------------
     # Cache HIT
-    # -----------------------------
-
     if best_similarity >= SIMILARITY_THRESHOLD:
 
         hit_count += 1
@@ -194,15 +180,12 @@ def query_endpoint(request: QueryRequest):
             "dominant_cluster": dominant_cluster
         }
 
-    # -----------------------------
     # Cache MISS
-    # -----------------------------
-
     miss_count += 1
 
     print("Cache MISS → running search")
 
-    results = run_semantic_search(query_embedding,dominant_cluster)
+    results = run_semantic_search(query_embedding, dominant_cluster)
 
     result_texts = [documents[i] for i in results]
 
